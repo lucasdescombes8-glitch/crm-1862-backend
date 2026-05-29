@@ -1,0 +1,316 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USERS & AUTHENTICATION
+// ============================================================================
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  nom       String
+  prenom    String
+  role      Role     @default(COMMERCIAL)
+  statut    String   @default("actif")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  interactions Interaction[]
+  taches       Tache[]
+  devisVersions DevisVersion[]
+  auditLogs    AuditLog[]
+
+  @@index([email])
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  COMMERCIAL
+  RESPONSABLE
+}
+
+// ============================================================================
+// CONTACTS
+// ============================================================================
+
+model Contact {
+  id        String   @id @default(uuid())
+  nom       String
+  prenom    String
+  email     String?  @unique
+  telephone String?
+  entreprise String?
+  type      String   // PROSPECT | CLIENT | FOURNISSEUR
+  statut    String   @default("actif") // ACTIF | INACTIF | REFUSÃ‰
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  interactions Interaction[]
+  evenements   Evenement[]
+
+  @@index([email])
+  @@index([statut])
+  @@index([type])
+  @@fulltext([nom, prenom, email])
+  @@map("contacts")
+}
+
+// ============================================================================
+// INTERACTIONS
+// ============================================================================
+
+model Interaction {
+  id        String   @id @default(uuid())
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId String
+  type      String   // EMAIL | CALL | MEETING | NOTE
+  contenu   String
+  dateInteraction DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([contactId])
+  @@index([dateInteraction])
+  @@map("interactions")
+}
+
+// ============================================================================
+// EVENEMENTS
+// ============================================================================
+
+model Evenement {
+  id        String   @id @default(uuid())
+  titre     String
+  type      String   // CONFERENCE | SEMINAIRE | COCKTAIL | etc
+  client    Contact  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  clientId  String
+  paxEstime Int
+  statut    String   @default("proposition") // PROPOSITION | CONFIRME | REFUSÃ‰
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  options   Option[]
+  taches    Tache[]
+  auditLogs AuditLog[]
+
+  @@index([clientId])
+  @@index([statut])
+  @@index([createdAt])
+  @@map("evenements")
+}
+
+// ============================================================================
+// OPTIONS (Planning details)
+// ============================================================================
+
+model Option {
+  id        String   @id @default(uuid())
+  evenement Evenement @relation(fields: [evenementId], references: [id], onDelete: Cascade)
+  evenementId String
+
+  // Horaires
+  heureDebugMontage    DateTime
+  heureOuverturePublic DateTime
+  heureFermeturePublic DateTime
+  heureFinDemolition   DateTime
+
+  // Configuration
+  paxEstime Int
+  salleIds  String   // JSON array
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  devis Devis[]
+
+  @@index([evenementId])
+  @@map("options")
+}
+
+// ============================================================================
+// DEVIS
+// ============================================================================
+
+model Devis {
+  id        String   @id @default(uuid())
+  numero    String   @unique // DEV-YYYY-NNN
+  option    Option   @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  optionId  String
+
+  // Services & Montants
+  services  Json     // Array of { id, label, montantHT }
+  montantHT Decimal  @db.Decimal(10, 2)
+  montantTTC Decimal @db.Decimal(10, 2)
+
+  // Status
+  statut    String   @default("brouillon") // BROUILLON | ENVOYÃ‰ | ACCEPTÃ‰ | REFUSÃ‰
+  dateEnvoi DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  versions  DevisVersion[]
+  factures  Facture[]
+
+  @@index([numero])
+  @@index([statut])
+  @@index([optionId])
+  @@map("devis")
+}
+
+// ============================================================================
+// DEVIS VERSIONS (Tracking changes)
+// ============================================================================
+
+model DevisVersion {
+  id        String   @id @default(uuid())
+  devis     Devis    @relation(fields: [devisId], references: [id], onDelete: Cascade)
+  devisId   String
+  versionNumber Int
+
+  // Content
+  services  Json
+  montantHT Decimal @db.Decimal(10, 2)
+  montantTTC Decimal @db.Decimal(10, 2)
+
+  // Audit
+  createdBy User     @relation(fields: [createdById], references: [id])
+  createdById String
+  createdAt DateTime @default(now())
+
+  @@unique([devisId, versionNumber])
+  @@index([devisId])
+  @@map("devis_versions")
+}
+
+// ============================================================================
+// FACTURES
+// ============================================================================
+
+model Facture {
+  id        String   @id @default(uuid())
+  numero    String   @unique // FACT-YYYY-NNN
+  devis     Devis    @relation(fields: [devisId], references: [id], onDelete: Restrict)
+  devisId   String
+
+  // Montants
+  montantTTC Decimal @db.Decimal(10, 2)
+  montantRecu Decimal? @db.Decimal(10, 2)
+
+  // Paiement
+  statutPaiement String @default("impayee") // IMPAYÃ‰E | PARTIELLEMENT | PAYÃ‰E
+  datePaiement DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([numero])
+  @@index([statut Paiement])
+  @@index([devisId])
+  @@map("factures")
+}
+
+// ============================================================================
+// TACHES (Kanban)
+// ============================================================================
+
+model Tache {
+  id        String   @id @default(uuid())
+  titre     String
+  evenement Evenement? @relation(fields: [evenementId], references: [id], onDelete: SetNull)
+  evenementId String?
+
+  // Status & PrioritÃ©
+  statut    String   @default("a_faire") // Ã€_FAIRE | EN_COURS | TERMINÃ‰E
+  priorite  String   @default("normale") // HAUTE | NORMALE | BASSE
+
+  // Assignation
+  assignee  User?    @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  assigneeId String?
+
+  // Dates
+  dueDate   DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([statut])
+  @@index([assigneeId])
+  @@index([dueDate])
+  @@index([evenementId])
+  @@map("taches")
+}
+
+// ============================================================================
+// AUDIT LOG (Change tracking)
+// ============================================================================
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  entityType String  // EVENEMENT | DEVIS | FACTURE
+  entityId  String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+
+  // Change tracking
+  action    String   // INSERT | UPDATE | DELETE
+  changes   Json     // { field: { old: value, new: value } }
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// SETTINGS & CONFIGURATION
+// ============================================================================
+
+model Service {
+  id    String @id @default(uuid())
+  nom   String
+  code  String @unique
+  categorie String
+  montantDefaut Decimal @db.Decimal(10, 2)
+  actif Boolean @default(true)
+
+  @@map("services")
+}
+
+model GrilleTarif {
+  id String @id @default(uuid())
+  type String // JOUR_LUN_SAM | NUIT_LUN_SAM | JOUR_DIM | NUIT_DIM
+  montantHeure Decimal @db.Decimal(10, 2)
+
+  @@map("grille_tarifs")
+}
+
+model Salle {
+  id String @id @default(uuid())
+  nom String
+  zone String
+  capacite Int
+  superficie Decimal @db.Decimal(10, 2)
+  active Boolean @default(true)
+
+  @@map("salles")
+}
